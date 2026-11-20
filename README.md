@@ -217,9 +217,24 @@ Results are published under `<outdir>/<sample_id>/`. Raw FASTQs are nested under
     └── macs2.<sample_id>_*                                # MACS2 peak calling output (narrowPeak, summits, pileup/lambda bedgraphs, xls)
 ```
  
-Everything except the CRAM, `total_sequencing_stats.txt` and `stats/` is produced by [hotspot3](https://github.com/vierstralab/hotspot3), so it only appears after hotspot calling has run (SRA mode or `hotspots_calling.nf`). Each `fdr<X>/` directory contains `<sample_id>.peaks.fdr<X>.bed.gz` and `<sample_id>.hotspots.fdr<X>.bed.gz` (plus `.bb` versions). Hotspots are contiguous significant regions; peaks are the summits within them, trimmed to peak width. Use **peaks** for downstream analyses such as building the DHS index. Column 4 of the peak files is the `sample_id`. The set of `fdr*` directories is controlled by `params.fdrs` (comma-separated FDR thresholds). The exact name of the fit-stats file depends on the [hotspot3](https://github.com/vierstralab/hotspot3) version: current releases write `<sample_id>.fit_stats.bed.gz`.
+### Which step produces what
+
+- **Alignment** (always): `<sample_id>.filtered.cram`, `<sample_id>.total_sequencing_stats.txt` and `stats/`.
+- **Hotspot calling** ([hotspot3](https://github.com/vierstralab/hotspot3)): everything else. These files only appear after hotspot calling has run, either in SRA mode or via `hotspots_calling.nf`.
+
+### Peaks and hotspots
+
+Each `fdr<X>/` directory contains:
+
+| File | Content |
+|---|---|
+| `<sample_id>.hotspots.fdr<X>.bed.gz` (+ `.bb`) | Hotspots: contiguous regions of significant bases |
+| `<sample_id>.peaks.fdr<X>.bed.gz` (+ `.bb`) | Peaks: summits within hotspots, trimmed to peak width. Column 4 is the `sample_id` |
+
+- Use **peaks** for downstream analyses such as building the DHS index.
+- Which `fdr*` directories are created is set by `params.fdrs` (comma-separated FDR thresholds).
+- The fit-stats file name depends on the hotspot3 version. Current releases write `<sample_id>.fit_stats.bed.gz`.
  
-These outputs are the inputs to [`nf-index`](https://github.com/vierstralab/nf-index): the `fdr0.001` and `fdr0.01` peak files, `normalized_density.bw`, the fit-stats file, `pvals.parquet` and the filtered CRAM.
  
 ## Notes
  
