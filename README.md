@@ -13,7 +13,7 @@ The pipeline handles adapter trimming (`fastp`), alignment (`bwa`), and downstre
    - unmapped and QC-fail reads are dropped (`samtools view -F 516`), and when `save_cram_mode = "nuclear"` only reads on nuclear chromosomes are kept;
    - insert-size metrics (paired-end only) and MACS2 peak calling (if `do_macs`) are run on these filtered reads;
    - the filtered reads are saved as `<sample_id>.filtered.cram`.
-4. **call_hotspots** — call hotspots with hotspot3 on the filtered CRAM. **This step runs automatically only in the `alignFromSRA` workflow.** For local FASTQs it is commented out in `main.nf`; run it afterwards with `hotspots_calling.nf` (see [Call hotspots on existing CRAMs](#call-hotspots-on-existing-crams)).
+4. **call_hotspots** — call hotspots with [hotspot3](https://github.com/vierstralab/hotspot3) on the filtered CRAM. hotspot3 is a peak caller for control-free DNase-seq/ATAC-seq data: it fits a local negative-binomial background, tests each base, and reports *hotspots* (contiguous significant regions) and *peaks* (summits within them) at each FDR in `params.fdrs`. It has mainly been tested on datasets with ≥ 10 million tags. See the [hotspot3 README](https://github.com/vierstralab/hotspot3) for the method, options and output formats. **This step runs automatically only in the `alignFromSRA` workflow.** For local FASTQs it is commented out in `main.nf`; run it afterwards with `hotspots_calling.nf` (see [Call hotspots on existing CRAMs](#call-hotspots-on-existing-crams)).
 Additional QC counts (filtered aligned reads, duplicate reads and percent duplication) can be computed from the CRAMs with `nextflow run stats.nf`.
  
 ### Method summary
@@ -48,7 +48,7 @@ Run with `-profile slurm` (or whatever you name it) in place of `-profile Altius
  
 ## Container
  
-The pipeline runs entirely inside a single Apptainer/Singularity container built from `aligning-pipeline.def` — no conda environment needs to be installed on the host. The image bundles HotSpot1, HotSpot2, hotspot3, kentUtils, and all of their Python/R dependencies, so alignment, subsampling, and hotspot calling (including hotspot3) all run from the same container.
+The pipeline runs entirely inside a single Apptainer/Singularity container built from `aligning-pipeline.def` — no conda environment needs to be installed on the host. The image bundles hotspot1, [hotspot3](https://github.com/vierstralab/hotspot3), kentUtils, and all of their Python/R dependencies, so alignment, subsampling, and hotspot calling all run from the same container.
  
 ### Building the `.sif` image
  
@@ -58,7 +58,7 @@ From the repository root:
 singularity build --fakeroot aligning-pipeline.sif aligning-pipeline.def
 ```
  
-This takes roughly **~15 minutes** to build (it compiles HotSpot1/HotSpot2/kentUtils from source and resolves two separate conda environments along the way).
+This takes roughly **~15 minutes** to build (it compiles hotspot1/kentUtils from source and resolves two separate conda environments along the way).
  
 `--fakeroot` lets you build without root access; your cluster account needs subuid/subgid ranges configured for this to work (ask your cluster admin if the build fails with a fakeroot-related permission error). If you have actual root/sudo instead, use `sudo singularity build aligning-pipeline.sif aligning-pipeline.def`.
  
@@ -85,7 +85,7 @@ This runs the default workflow:
 1. Reads `params.samples_file` and groups records by `align_id`.
 2. Trims adapters with `fastp` (`trimReads`).
 3. Aligns, filters, marks duplicates and writes `<sample_id>.filtered.cram` (`alignReads`).
-> **Note:** hotspot calling is **not** run in this mode (`call_hotspots` is commented out at the end of the default workflow in `main.nf`). To get peaks and the other hotspot3 outputs needed by `nf-index`, run [`hotspots_calling.nf`](#call-hotspots-on-existing-crams) on the resulting CRAMs.
+> **Note:** hotspot calling is **not** run in this mode (`call_hotspots` is commented out at the end of the default workflow in `main.nf`). To get peaks and the other [hotspot3](https://github.com/vierstralab/hotspot3) outputs needed by `nf-index`, run [`hotspots_calling.nf`](#call-hotspots-on-existing-crams) on the resulting CRAMs.
  
 ### Align reads downloaded from SRA
  
@@ -100,18 +100,18 @@ This runs the `alignFromSRA` workflow:
 1. Reads `params.samples_file` and, for each unique `align_id`, downloads the run with `prefetch` and converts it to FASTQ with `fasterq-dump` (paired- and single-end output are both attempted; whichever exists is used).
 2. Also pulls run metadata via `ffq` and publishes it alongside the FASTQs under `<outdir>/<sample_id>/stats`.
 3. Detects whether the run is paired- or single-end based on which FASTQ files are non-empty, and drops any run for which no reads were downloaded (e.g. failed/invalid accessions — download errors are ignored rather than failing the pipeline).
-4. Trims and aligns exactly as in the default workflow, then calls hotspots with hotspot3 on the filtered CRAM.
+4. Trims and aligns exactly as in the default workflow, then calls hotspots with [hotspot3](https://github.com/vierstralab/hotspot3) on the filtered CRAM.
 Downloaded FASTQs are published to `<outdir>/<sample_id>/`, so re-running the pipeline can reuse previously downloaded data instead of re-fetching it from SRA.
  
 ### Call hotspots on existing CRAMs
  
-Runs hotspot3 directly on CRAM (or BAM) files, for example after the default local-FASTQ workflow or to re-call hotspots without re-aligning:
+Runs [hotspot3](https://github.com/vierstralab/hotspot3) directly on CRAM (or BAM) files, for example after the default local-FASTQ workflow or to re-call hotspots without re-aligning:
  
 ```bash
 nextflow run hotspots_calling.nf -profile Altius --samples_file crams.tsv
 ```
  
-`crams.tsv` is tab-separated with columns `sample_id`, `cram_file` and optionally `cram_index` (defaults to `<cram_file>.crai`). If the index is missing it is created on the fly. Outputs are the hotspot3 files listed under [Output](#output), written to `<outdir>/<sample_id>/`.
+`crams.tsv` is tab-separated with columns `sample_id`, `cram_file` and optionally `cram_index` (defaults to `<cram_file>.crai`). If the index is missing it is created on the fly. Outputs are the [hotspot3](https://github.com/vierstralab/hotspot3) files listed under [Output](#output), written to `<outdir>/<sample_id>/`.
  
 ### QC statistics from existing CRAMs
  
@@ -183,9 +183,9 @@ Key parameters set in `params.config` (paths below are examples from a human GRC
 | `centers` | Center-site annotation file for hotspot calling |
 | `density_buckets` | Chromatin density bucket file |
 | `chrominfo` | Chromosome info file for the SPOT1 score step |
-| `hotspots_dir` | Path to the HotSpot1 distribution |
-| `readlength` | Read length used by HotSpot1 |
-| `subsampling_spot1_depth` / `subsample_hotspot2_depth` | Read-depth targets used when subsampling for QC metrics |
+| `hotspots_dir` | Path to the hotspot1 distribution |
+| `readlength` | Read length used by hotspot1 |
+| `subsampling_spot1_depth` | Read-depth target used when subsampling for the hotspot1 SPOT score |
  
 ## Output
  
@@ -217,7 +217,7 @@ Results are published under `<outdir>/<sample_id>/`. Raw FASTQs are nested under
     └── macs2.<sample_id>_*                                # MACS2 peak calling output (narrowPeak, summits, pileup/lambda bedgraphs, xls)
 ```
  
-Everything except the CRAM, `total_sequencing_stats.txt` and `stats/` is produced by hotspot3, so it only appears after hotspot calling has run (SRA mode or `hotspots_calling.nf`). Each `fdr<X>/` directory contains `<sample_id>.peaks.fdr<X>.bed.gz` and `<sample_id>.hotspots.fdr<X>.bed.gz` (plus `.bb` versions). The set of `fdr*` directories is controlled by `params.fdrs` (comma-separated FDR thresholds). The exact name of the fit-stats file depends on the hotspot3 version: current releases write `<sample_id>.fit_stats.bed.gz`.
+Everything except the CRAM, `total_sequencing_stats.txt` and `stats/` is produced by [hotspot3](https://github.com/vierstralab/hotspot3), so it only appears after hotspot calling has run (SRA mode or `hotspots_calling.nf`). Each `fdr<X>/` directory contains `<sample_id>.peaks.fdr<X>.bed.gz` and `<sample_id>.hotspots.fdr<X>.bed.gz` (plus `.bb` versions). Hotspots are contiguous significant regions; peaks are the summits within them, trimmed to peak width. Use **peaks** for downstream analyses such as building the DHS index. Column 4 of the peak files is the `sample_id`. The set of `fdr*` directories is controlled by `params.fdrs` (comma-separated FDR thresholds). The exact name of the fit-stats file depends on the [hotspot3](https://github.com/vierstralab/hotspot3) version: current releases write `<sample_id>.fit_stats.bed.gz`.
  
 These outputs are the inputs to [`nf-index`](https://github.com/vierstralab/nf-index): the `fdr0.001` and `fdr0.01` peak files, `normalized_density.bw`, the fit-stats file, `pvals.parquet` and the filtered CRAM.
  
