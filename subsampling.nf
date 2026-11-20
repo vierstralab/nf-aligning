@@ -57,9 +57,7 @@ process subsample {
 
 process spot_score {
 
-    // Impossible to use anywhere except Altius cluster
     // conda params.conda
-    // module "bedops/2.4.35-typical:samtools/1.3:modwt/1.0:kentutil/302:hotspot2/2.1.1:jdk/1.8.0_92:gcc/4.7.2:R/3.2.5:picard/2.8.1:git/2.3.3:coreutils/8.25:bedtools/2.25.0:python/3.5.1:pysam/0.9.0:htslib/1.6.0:numpy/1.11.0:atlas-lapack/3.10.2:scipy/1.0.0:scikit-learn/0.18.1:preseq:/2.0.3:gsl/2.4"
     container "${params.container}"
     containerOptions "${fastaContainer} ${chrominfoContainer}"
 
