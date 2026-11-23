@@ -1,38 +1,84 @@
 # nf-aligning
- 
-A Nextflow pipeline for aligning DNase-seq/ATAC-seq style short-read data to a reference genome with BWA. Reads can come from local FASTQ files already on the server, or be pulled directly from the Sequence Read Archive (SRA) by accession.
- 
-The pipeline handles adapter trimming (`fastp`), alignment (`bwa`), and downstream hotspot calling, and can optionally bootstrap its input by downloading raw reads from SRA before running the same trim/align/hotspot-calling steps.
- 
-## Pipeline Steps
- 
-1. **Download** *(SRA mode only, `-entry alignFromSRA`)* — fetch raw reads for each `align_id` from the SRA using `prefetch` and `fasterq-dump`.
-2. **trimReads** — trim adapter sequences from the reads with `fastp`, quality and length filtering disabled.
-3. **alignReads** — align each run with `bwa aln` followed by `bwa sampe` (paired-end) or `bwa samse` (single-end). `bin/filter_reads.py` then **flags** (does not remove) reads failing filters: QC-fail (`0x200`) for MAPQ < 10, more than 2 mismatches, unpaired/improperly paired reads, or insert size > 750 bp; non-nuclear (`0x1000`) for reads off the nuclear chromosomes. Runs are sorted, merged per `sample_id`, and duplicates are **marked** (not removed) with Picard `MarkDuplicatesWithMateCigar`. From the marked BAM:
-   - per-sample sequencing stats are written to `<sample_id>.total_sequencing_stats.txt` (`bin/bamcounts.py`);
-   - unmapped and QC-fail reads are dropped (`samtools view -F 516`), and when `save_cram_mode = "nuclear"` only reads on nuclear chromosomes are kept;
-   - insert-size metrics (paired-end only) are computed on these filtered reads;
-   - the filtered reads are saved as `<sample_id>.filtered.cram`.
-4. **call_hotspots** — call hotspots with [hotspot3](https://github.com/vierstralab/hotspot3) on the filtered CRAM. hotspot3 is a peak caller for control-free DNase-seq/ATAC-seq data: it fits a local negative-binomial background, tests each base, and reports *hotspots* (contiguous significant regions) and *peaks* (summits within them) at each FDR in `params.fdrs`. It has mainly been tested on datasets with ≥ 10 million tags. See the [hotspot3 README](https://github.com/vierstralab/hotspot3) for the method, options and output formats. This step runs in both the default and `alignFromSRA` workflows. If you don't need it, remove the `| call_hotspots` line from the workflow in `main.nf`.
-Additional QC counts (filtered aligned reads, duplicate reads and percent duplication) can be computed from the CRAMs with `nextflow run stats.nf`.
- 
-### Method summary
- 
-Reads were trimmed of adapter sequences (`fastp --disable_quality_filtering --disable_length_filtering --detect_adapter_for_pe`) and aligned to either the GRCh38/hg38 or mm10 genome assembly using `bwa aln`.
- 
-## Requirements
- 
+
+nf-aligning is a Nextflow pipeline that aligns DNase-seq and ATAC-seq short reads to a reference genome and calls peaks with [hotspot3](https://github.com/vierstralab/hotspot3). Reads can come from local FASTQ files or be downloaded from the Sequence Read Archive (SRA) by run accession.
+
+The main steps are:
+- **Download** *(SRA mode only)*: fetch each run with `prefetch` and `fasterq-dump`, and its metadata with `ffq`.
+- **Adapter trimming** with `fastp`, with quality and length filtering disabled.
+- **Alignment** with `bwa aln`, followed by `bwa sampe` (paired-end) or `bwa samse` (single-end).
+- **Read filtering**: `bin/filter_reads.py` **flags** (does not remove) reads failing filters: QC-fail (`0x200`) for MAPQ < 10, more than 2 mismatches, unpaired or improperly paired reads, or insert size > 750 bp; non-nuclear (`0x1000`) for reads off the nuclear chromosomes.
+- **Duplicate marking**: runs are sorted and merged per `sample_id`, and duplicates are **marked** (not removed) with Picard `MarkDuplicatesWithMateCigar`.
+- **Filtered CRAM**: unmapped and QC-fail reads are dropped (`samtools view -F 516`), and with `save_cram_mode = "nuclear"` only reads on nuclear chromosomes are kept (default `all`). The result is saved as `<sample_id>.filtered.cram`. Sequencing stats are computed on the duplicate-marked reads before this filter, and insert size metrics (paired-end only) after it.
+- **Peak calling** with [hotspot3](https://github.com/vierstralab/hotspot3) on the filtered CRAM, at each FDR in `params.fdrs`.
+
+The per-sample outputs (filtered CRAM, peaks, normalized density, fit statistics, p-values) are the input to [nf-index](https://github.com/vierstralab/nf-index), which builds the consensus DHS index.
+
+⚠️ Check the duplication rate of each library. hotspot3 counts duplicates, and above ~50% duplication its background model breaks down and peak calling can produce unexpected results. Downsample such libraries first, see [Libraries with a high duplication rate](#libraries-with-a-high-duplication-rate).
+
+Coding agents: read [AGENTS.md](AGENTS.md) first.
+
+## Table of contents
+
+- [Installation](#installation)
+  - [Prerequisites](#prerequisites)
+  - [1. Clone the repository](#1-clone-the-repository)
+  - [2. Build the container](#2-build-the-container)
+  - [3. Set the parameters](#3-set-the-parameters)
+  - [4. Configure the compute environment](#4-configure-the-compute-environment)
+- [Parameters](#parameters)
+- [Usage](#usage)
+  - [Align local FASTQ files](#align-local-fastq-files)
+  - [Align reads downloaded from SRA](#align-reads-downloaded-from-sra)
+  - [QC workflows](#qc-workflows)
+  - [Subsampling workflows](#subsampling-workflows)
+  - [Libraries with a high duplication rate](#libraries-with-a-high-duplication-rate)
+  - [Run pipeline steps separately](#run-pipeline-steps-separately)
+- [Output files](#output-files)
+  - [Main outputs](#main-outputs)
+  - [Peak and hotspot calls](#peak-and-hotspot-calls)
+- [Authors](#authors)
+
+# Installation
+
+## Prerequisites
 - [Nextflow](https://www.nextflow.io/)
-- A container runtime (Docker/Singularity/Apptainer) able to run the pipeline's container image, referenced via `params.container`
-- A compute cluster/executor configured in `nextflow.config` — see [Compute environment](#compute-environment) below
-## Compute environment
- 
-This pipeline does not require access to any specific cluster. `-profile Altius` is just the example profile used at Altius (SLURM-based); adjust or add a profile in `nextflow.config` to match your own cluster/executor.
- 
-See the [Nextflow executor documentation](https://www.nextflow.io/docs/latest/executor.html) and [config profiles documentation](https://www.nextflow.io/docs/latest/config.html#config-profiles) for how to define a profile for your environment.
- 
-A minimal example for a SLURM cluster:
- 
+- Apptainer/Singularity, to build and run the pipeline's container
+- A compute cluster or other Nextflow executor (see [4. Configure the compute environment](#4-configure-the-compute-environment))
+
+## 1. Clone the repository
+```bash
+git clone https://github.com/vierstralab/nf-aligning.git
+cd nf-aligning
+```
+
+## 2. Build the container
+
+All tools run inside a single Apptainer/Singularity image, so no conda environment is needed on the host. The image contains bwa, samtools, Picard, fastp, sra-tools, ffq, preseq, [hotspot3](https://github.com/vierstralab/hotspot3), hotspot1 (used only for the SPOT score) and kentUtils.
+
+```bash
+cd container
+singularity build --fakeroot ../aligning-pipeline.sif aligning-pipeline.def
+```
+
+The build takes about 15 minutes. It writes the image to the repository root, where `params.container` (`${projectDir}/aligning-pipeline.sif`) expects it; if you put it elsewhere, point `params.container` at it. Rebuild the image whenever a file in `container/` changes.
+
+`--fakeroot` builds without root access, but your cluster account needs subuid/subgid ranges configured (ask your cluster admin if the build fails with a fakeroot permission error). With root, use `sudo singularity build ../aligning-pipeline.sif aligning-pipeline.def` instead.
+
+The build files in `container/`:
+
+| File | Purpose |
+|---|---|
+| `aligning-pipeline.def` | Apptainer/Singularity recipe |
+| `environment.yml` | Conda env with the alignment, QC and hotspot3 dependencies; hotspot3 itself is installed with `pip` during the build |
+
+## 3. Set the parameters
+
+Fill in the reference files in `params.config` (see [Parameters](#parameters)). `params.config` is a symlink to the human GRCh38 config, `params.human.config`; `params.mouse.config` is the mm10 version. To switch to mouse, run `ln -sf params.mouse.config params.config`. The paths in both point to the Altius cluster and need to be replaced with your own.
+
+## 4. Configure the compute environment
+
+The pipeline doesn't depend on a specific cluster. `-profile Altius` in the examples below is the SLURM profile used at Altius; add a profile for your own executor to `nextflow.config`, for example:
+
 ```groovy
 profiles {
     slurm {
@@ -43,237 +89,188 @@ profiles {
     }
 }
 ```
- 
-Run with `-profile slurm` (or whatever you name it) in place of `-profile Altius`.
- 
-## Container
- 
-The pipeline runs entirely inside a single Apptainer/Singularity container — no conda environment needs to be installed on the host. The image bundles bwa, samtools, Picard, fastp, sra-tools/ffq, hotspot1 (used only by the optional SPOT score), [hotspot3](https://github.com/vierstralab/hotspot3) and kentUtils, so alignment, subsampling and hotspot calling all run from the same image.
- 
-The build files live in `container/`:
- 
-| File | Purpose |
-|---|---|
-| `container/aligning-pipeline.def` | Apptainer/Singularity recipe for the image |
-| `container/environment.yml` | Conda env for alignment and QC (bwa, samtools, Picard, fastp, sra-tools, …), pinned to Python 3.8 |
-| `container/environment.hotspot3.yml` | Separate conda env for hotspot3, which needs Python 3.9+ and newer libraries than the pinned alignment env |
- 
-They are kept separate so that installing hotspot3 doesn't change the pinned versions of the alignment tools. Both are installed side by side in the image and are on `PATH`.
- 
-### Building the `.sif` image
- 
-```bash
-cd container
-singularity build --fakeroot ../aligning-pipeline.sif aligning-pipeline.def
-```
- 
-Run the build from inside `container/` so the recipe can find the `environment*.yml` files. The image is written to the repository root, which is where `params.container` (`${projectDir}/aligning-pipeline.sif`) expects it.
- 
-This takes roughly **~15 minutes** (it compiles hotspot1/kentUtils from source and resolves both conda environments).
- 
-`--fakeroot` lets you build without root access; your cluster account needs subuid/subgid ranges configured for this to work (ask your cluster admin if the build fails with a fakeroot-related permission error). If you have actual root/sudo instead, use `sudo singularity build ../aligning-pipeline.sif aligning-pipeline.def`.
- 
-If you put the image somewhere else, point `params.container` at it. Rebuild the image any time a file in `container/` changes.
- 
-## Setup
- 
-1. Clone the repository and build the container image referenced by `params.container` (see [Container](#container)).
-2. Fill in the required file paths in `params.config` (reference genome, chrom sizes, hotspot annotation files, etc. — see [Parameters](#parameters) below).
-3. Configure a profile for your compute environment in `nextflow.config` (see [Compute environment](#compute-environment) above).
-4. Prepare a tab-separated samples file and point `params.samples_file` at it (see [Input files](#input-files) below).
-## Usage
- 
-### Align local FASTQ files
- 
-```bash
-nextflow run main.nf -profile Altius
-```
- 
-This runs the default workflow:
- 
-1. Reads `params.samples_file` and groups records by `align_id`.
-2. Trims adapters with `fastp` (`trimReads`).
-3. Aligns, filters, marks duplicates and writes `<sample_id>.filtered.cram` (`alignReads`).
-4. Calls hotspots and peaks on the filtered CRAM with [hotspot3](https://github.com/vierstralab/hotspot3) (`call_hotspots`). These are the outputs `nf-index` needs.
- 
-### Align reads downloaded from SRA
- 
-Use this mode to fetch raw reads for one or more SRA run accessions and run them through the same trimming/alignment/hotspot-calling pipeline, without needing to stage FASTQs on disk first.
- 
-```bash
-nextflow run main.nf -profile Altius -entry alignFromSRA
-```
- 
-This runs the `alignFromSRA` workflow:
- 
-1. Reads `params.samples_file` and, for each unique `align_id`, downloads the run with `prefetch` and converts it to FASTQ with `fasterq-dump` (paired- and single-end output are both attempted; whichever exists is used).
-2. Also pulls run metadata via `ffq` and publishes it as `<outdir>/<sample_id>/stats/<align_id>/<align_id>_info.json`, next to that run's `fastp` reports.
-3. Detects whether the run is paired- or single-end based on which FASTQ files are non-empty, and drops any run for which no reads were downloaded (e.g. failed/invalid accessions — download errors are ignored rather than failing the pipeline).
-4. Trims and aligns exactly as in the default workflow, then calls hotspots with [hotspot3](https://github.com/vierstralab/hotspot3) on the filtered CRAM.
-Downloaded FASTQs are published to `<outdir>/<sample_id>/`, so re-running the pipeline can reuse previously downloaded data instead of re-fetching it from SRA.
- 
-### Call hotspots on existing CRAMs
- 
-Runs [hotspot3](https://github.com/vierstralab/hotspot3) directly on existing CRAM (or BAM) files, for example to re-call hotspots with different settings without re-aligning:
- 
-```bash
-nextflow run hotspots_calling.nf -profile Altius --samples_file crams.tsv
-```
- 
-`crams.tsv` is tab-separated with columns `sample_id`, `cram_file` and optionally `cram_index` (defaults to `<cram_file>.crai`). If the index is missing it is created on the fly. Outputs are the [hotspot3](https://github.com/vierstralab/hotspot3) files listed under [Output](#output), written to `<outdir>/<sample_id>/`.
- 
-### QC statistics from existing CRAMs
- 
-```bash
-nextflow run stats.nf -profile Altius --samples_file crams.tsv
-```
- 
-Needs columns `sample_id`, `cram_file`, `cram_index`. Writes `<sample_id>.sequencing_stats.txt` (filtered aligned read count and duplicate count, i.e. reads with SAM flag `1024`) and `<sample_id>.spotdups.txt` / `<sample_id>.percent_dup.txt` (Picard duplication metrics recomputed from scratch).
- 
-## Input files
- 
-`params.samples_file` is a **tab-separated** file with a header row. The columns required depend on the entry point:
- 
-### Default workflow (local FASTQs)
- 
-| Column | Description |
-|---|---|
-| `sample_id` | Sample/group identifier used for output paths |
-| `align_id` | Unique identifier for this alignment (used for grouping and file naming) |
-| `reads1` | Path to read 1 FASTQ |
-| `reads2` | Path to read 2 FASTQ (required only when `type` is `paired`) |
-| `type` | `paired` or `single` |
-| `adapterP7` | (Optional) Adapter sequence for read 1; auto-detected by `fastp` if omitted |
-| `adapterP5` | (Optional) Adapter sequence for read 2, paired-end only; auto-detected if omitted |
- 
-Adapter sequences are sanitized automatically — any trailing ambiguous (non-ACGT) bases are stripped, with a warning printed to the console.
- 
-Example:
- 
-```tsv
-sample_id align_id reads1 reads2 type adapterP7 adapterP5
-LIB001 AG001 /data/reads/AG001_R1.fastq.gz /data/reads/AG001_R2.fastq.gz paired
-LIB002 AG002 /data/reads/AG002.fastq.gz single
-```
- 
-### `alignFromSRA` workflow
- 
-| Column | Description |
-|---|---|
-| `sample_id` | Sample/group identifier used for output paths |
-| `align_id` | SRA run accession (e.g. `SRR12345678`) to download |
- 
-Example:
- 
-```tsv
-sample_id align_id
-SRX22512992 SRR26815981
-SRX22512992 SRR26815982
-```
- 
-## Parameters
- 
-Key parameters set in `params.config` (paths below are examples from a human GRCh38 configuration and should be adjusted for your genome/environment):
- 
+
+and run with `-profile slurm` in place of `-profile Altius`. See the Nextflow docs on [executors](https://www.nextflow.io/docs/latest/executor.html) and [config profiles](https://www.nextflow.io/docs/latest/config.html#config-profiles).
+
+# Parameters
+
+Set in `params.config`; the paths there are examples from the human GRCh38 configuration.
+
 | Parameter | Description |
 |---|---|
 | `outdir` | Output directory (relative path recommended) |
-| `samples_file` | Path to the tab-separated samples file |
+| `samples_file` | Tab-separated samples file (see [Usage](#usage)) |
 | `container` | Path to the pipeline's container image |
-| `threads` | CPU threads for read download/trimming steps |
-| `genome_fasta_file` | Reference genome FASTA (indexed for BWA) |
-| `nuclear_chroms` / `nuclear_chrom_sizes` | Nuclear chromosome name/size lists, used to restrict analysis to nuclear DNA |
-| `save_cram_mode` | Which reads to retain in output CRAMs (`all` or `nuclear`) |
-| `fdrs` | Comma-separated FDR thresholds for hotspot calling |
-| `save_debug` | Whether to keep intermediate debug output |
-| `mappable_bases` | Mappable bases (BED, gzipped) passed to hotspot3 |
- 
-Used only by the optional SPOT score (`subsampling.nf -entry spot1score`, see [Additional workflows](#additional-workflows)):
- 
+| `threads` | CPU threads for download, trimming, alignment, sorting and CRAM conversion |
+| `genome_fasta_file` | Reference genome FASTA (with `.fai`). The BWA index must sit next to it, named after the FASTA without its extension (`bwa index -p GRCh38_no_alts GRCh38_no_alts.fa`) |
+| `nuclear_chroms` | Text file with nuclear chromosome names, one per line |
+| `save_cram_mode` | `all` (default) keeps all reads that pass the filters in the output CRAMs; `nuclear` keeps only reads on nuclear chromosomes |
+| `fdrs` | Comma-separated FDR thresholds for peak calling |
+| `save_debug` | Keep the hotspot3 `debug/` folder |
+| `nuclear_chrom_sizes` | Nuclear chromosome sizes, passed to hotspot3 |
+| `mappable_bases` | Mappable bases (BED, gzipped), passed to hotspot3 |
+
+Used only by `subsampling.nf -entry spot1score` (`chrominfo` and `spot1_mappable_file` must still exist for any `subsampling.nf` entry):
+
 | Parameter | Description |
 |---|---|
-| `chrominfo` | Chromosome info BED for hotspot1 |
-| `hotspots_dir` | Path to the hotspot1 distribution (the copy inside the container is at `/hotspot1`) |
-| `readlength` | Read length (k-mer size) of the hotspot1 mappability file |
-| `subsampling_spot1_depth` | Number of reads to subsample to before scoring |
- 
-## Output
- 
-Results are published under `<outdir>/<sample_id>/`. Raw FASTQs are nested under a subdirectory named by `align_id` (the SRA run accession in SRA mode); all downstream output files are prefixed with `sample_id` instead:
- 
+| `chrominfo` | Chromosome coordinates (BED) for hotspot1 |
+| `spot1_mappable_file` | Uniquely mappable positions (BED) for reads of length `readlength` |
+| `readlength` | Read length (k-mer size) of `spot1_mappable_file` |
+| `subsampling_spot1_depth` | Number of reads to subsample to before scoring (default 5,000,000; keep the default) |
+
+# Usage
+
+## Align local FASTQ files
+
+```bash
+nextflow run main.nf -profile Altius --samples_file samples.tsv
+```
+
+Runs trimming, alignment, filtering and hotspot3 peak calling, writing per-sample outputs to `<outdir>/<sample_id>/` (see [Output files](#output-files)).
+
+`samples.tsv` is tab-separated with a header row:
+
+| Column | Description |
+|---|---|
+| `sample_id` | Sample identifier; runs with the same `sample_id` are merged after alignment |
+| `align_id` | Unique identifier of the run, used in file names. Rows with a repeated `align_id` are dropped |
+| `reads1` | Absolute path to the read 1 FASTQ |
+| `reads2` | Absolute path to the read 2 FASTQ (paired-end only) |
+| `type` | `paired` or `single` |
+| `adapterP7` | (Optional) Adapter sequence for read 1; detected by `fastp` if omitted |
+| `adapterP5` | (Optional) Adapter sequence for read 2, paired-end only; detected by `fastp` if omitted |
+
+Adapter sequences are cut at the first character that is not A, C, G or T, with a warning.
+
+```tsv
+sample_id	align_id	reads1	reads2	type	adapterP7	adapterP5
+LIB001	AG001	/data/reads/AG001_R1.fastq.gz	/data/reads/AG001_R2.fastq.gz	paired
+LIB002	AG002	/data/reads/AG002.fastq.gz		single
+```
+
+## Align reads downloaded from SRA
+
+```bash
+nextflow run main.nf -profile Altius -entry alignFromSRA --samples_file sra_runs.tsv
+```
+
+Downloads each run with `prefetch` and `fasterq-dump`, detects whether it is paired- or single-end from the downloaded files, then trims, aligns and calls peaks as above. `sra_runs.tsv` has two columns:
+
+| Column | Description |
+|---|---|
+| `sample_id` | Sample identifier; runs with the same `sample_id` are merged after alignment |
+| `align_id` | SRA run accession (e.g. `SRR26815981`) |
+
+```tsv
+sample_id	align_id
+SRX22512992	SRR26815981
+SRX22512992	SRR26815982
+```
+
+Downloaded FASTQs are saved to `<outdir>/<sample_id>/<align_id>/`, and the `ffq` run metadata to `<outdir>/<sample_id>/stats/<align_id>/<align_id>_info.json`. Runs that fail to download are skipped and the pipeline continues. Empty placeholder FASTQs are saved for them, so check that every run in `sra_runs.tsv` has non-empty FASTQs.
+
+## QC workflows
+
+`stats.nf` takes existing CRAMs. In the tables below, the nuclear filter is `samtools view -F 516` (drops unmapped and QC-fail reads) on `nuclear_chroms`. `nuclearStats` writes `<sample_id>.total_sequencing_stats.txt`, the same name as the main pipeline, so give it its own `--outdir`.
+
+| Entry | Input columns | Steps | Output in `<outdir>/<sample_id>/` |
+|---|---|---|---|
+| default | `sample_id`, `cram_file`, `cram_index` | Read counts and Picard duplication metrics | `<sample_id>.sequencing_stats.txt` (filtered aligned reads; duplicates, i.e. flag `1024`), `<sample_id>.spotdups.txt` and `<sample_id>.percent_dup.txt` (Picard duplication metrics recomputed after clearing the existing duplicate flags) |
+| `-entry nuclearStats` | `sample_id`, `cram_file`, `cram_index` | Nuclear filter, then `bin/bamcounts.py` | `<sample_id>.total_sequencing_stats.txt` |
+| `-entry preseq` | `sample_id`, `cram_file`, `cram_index`, `read_type` (`paired` or `single`) | `preseq c_curve` on reads on `nuclear_chroms` | `<outdir>/<sample_id>.preseq_hist.txt` (directly in `<outdir>`) |
+
+## Subsampling workflows
+
+`subsampling.nf` takes existing CRAMs and calls peaks or computes the SPOT score at a matched depth. `subsampleToFrac` writes files with the same names as the main pipeline (`<sample_id>.total_sequencing_stats.txt` and the hotspot3 outputs), so give it its own `--outdir`.
+
+| Entry | Input columns | Steps | Output in `<outdir>/<sample_id>/` |
+|---|---|---|---|
+| `-entry subsampleToFrac` | `sample_id`, `cram_file`, `cram_index`, `frac` | Nuclear filter → keep fraction `frac` of read pairs (`samtools view --subsample <frac> --subsample-seed 42`) → re-mark duplicates → hotspot3, `bamcounts.py` stats and CRAM | `<sample_id>.subsampled_pairs.bam(.bai)`, `<sample_id>.marked.cram(.crai)`, `<sample_id>.total_sequencing_stats.txt` and the hotspot3 outputs |
+| `-entry spot1score` | `sample_id`, `cram_file` (index at `<cram_file>.crai`) | Read 1 only → nuclear filter → subsample to `subsampling_spot1_depth` reads → hotspot1 SPOT score | `r1.spot.out` (not prefixed with `sample_id`) |
+
+## Libraries with a high duplication rate
+
+hotspot3 fits the background assuming that nonspecific cleavages follow a negative binomial distribution. Duplicates are marked but kept in the filtered CRAM and counted by hotspot3, so in libraries with a high duplication rate this assumption breaks down and peak calling can produce unexpected results. We downsampled such libraries to a duplication rate below 50%, where hotspot3 still works reliably:
+
+1. Compute the library complexity curve with `nextflow run stats.nf -entry preseq` on the filtered CRAMs. `<outdir>/<sample_id>.preseq_hist.txt` lists the number of distinct reads (pairs, for paired-end data) at increasing sequencing depth. The duplication rate at a given depth is `1 - distinct_reads / total_reads`; take the largest depth at which it is below 50% and divide it by the library size to get the fraction to keep:
+```python
+import pandas as pd
+
+curve = pd.read_table('<sample_id>.preseq_hist.txt')  # total_reads, distinct_reads
+total, distinct = curve.iloc[:, 0], curve.iloc[:, 1]
+dup_rate = 1 - distinct / total  # the last row is the full library
+frac = total[dup_rate < 0.5].max() / total.max()
+```
+2. For libraries with `frac < 1`, run `nextflow run subsampling.nf -entry subsampleToFrac` with that `frac`. It keeps the fraction of read pairs, re-marks duplicates and calls peaks on the downsampled reads.
+
+## Run pipeline steps separately
+
+The steps can also be run on their own, which is mostly useful for debugging or for finishing samples that stopped partway (if `-resume` can't pick them up).
+
+Align already trimmed FASTQs:
+```bash
+nextflow run aligning.nf -profile Altius --samples_file trimmed.tsv
+```
+`trimmed.tsv` has columns `sample_id`, `reads1`, `reads2` and `type`, as in [Align local FASTQ files](#align-local-fastq-files). Outputs are the alignment files listed in [Main outputs](#main-outputs).
+
+Call peaks on existing CRAM (or BAM) files:
+```bash
+nextflow run hotspots_calling.nf -profile Altius --samples_file crams.tsv
+```
+`crams.tsv` has columns `sample_id`, `cram_file` and optionally `cram_index` (defaults to `<cram_file>.crai`, created if missing; set it to the `.bai` for BAM files). Outputs are the hotspot3 files listed in [Main outputs](#main-outputs).
+
+# Output files
+
+Results are written to `<outdir>/<sample_id>/`.
+
+## Main outputs
+
 ```
 <outdir>/<sample_id>/
-├── <align_id>/                                          # raw run FASTQs (SRA mode only), e.g. SRR13520417/
-├── <sample_id>.filtered.cram(.crai)                      # filtered, duplicate-marked alignments (main alignment output)
-├── <sample_id>.background.bw                            # local background signal (bigWig)
-├── <sample_id>.cutcounts.bed.gz(.tbi)                    # per-base cut counts, tabix-indexed
-├── <sample_id>.fit_stats.tsv.gz(.tbi, .iter1, .iter1.tbi)  # background model fit statistics
-├── <sample_id>.normalized_density.bw                     # normalized signal density (bigWig)
-├── <sample_id>.peak_calling.log                          # peak calling log
-├── <sample_id>.per_segment.background.bw                 # per-segment background signal
-├── <sample_id>.pvals.parquet/                            # per-base p-values (partitioned parquet)
-├── <sample_id>.thresholds.bw                             # significance thresholds (bigWig)
-├── <sample_id>.total_cutcounts                           # total cut count
-├── <sample_id>.total_sequencing_stats.txt                # sequencing depth/stats summary
-├── debug/                                                # intermediate/debug output (only when `save_debug = true`)
-├── fdr0.001/                                             # hotspot calls thresholded at FDR 0.001
-├── fdr0.01/                                              # hotspot calls thresholded at FDR 0.01
-├── fdr0.05/                                              # hotspot calls thresholded at FDR 0.05
-└── stats/
-    ├── <align_id>/                                       # one subdirectory per run
-    │   ├── fastp.json, fastp.html                        # adapter-trimming reports
-    │   └── <align_id>_info.json                          # SRA run metadata from `ffq` (SRA mode only)
-    ├── <sample_id>.CollectInsertSizeMetrics.picard(.pdf)  # Picard insert size metrics (paired-end only)
-    └── <sample_id>.MarkDuplicates.picard                  # Picard duplicate-marking metrics
+├── <align_id>/                                     # downloaded FASTQs (SRA mode only)
+├── <sample_id>.filtered.cram(.crai)                # filtered, duplicate-marked alignments
+├── <sample_id>.total_sequencing_stats.txt          # sequencing stats (bin/bamcounts.py)
+├── stats/
+│   ├── <align_id>/
+│   │   ├── fastp.json, fastp.html                  # adapter trimming reports
+│   │   └── <align_id>_info.json                    # SRA run metadata from ffq (SRA mode only)
+│   ├── <sample_id>.MarkDuplicates.picard           # Picard duplicate marking metrics
+│   └── <sample_id>.CollectInsertSizeMetrics.picard(.pdf)  # Picard insert size metrics (paired-end only)
+│
+│   # hotspot3
+├── <sample_id>.cutcounts.bed.gz(.tbi)              # per-base cut counts
+├── <sample_id>.total_cutcounts                     # total cut count
+├── <sample_id>.fit_stats.bed.gz(.tbi)              # background model fit statistics per segment
+├── <sample_id>.fit_stats.bed.gz.iter<N>(.tbi)      # fit statistics of intermediate refits (only for samples that needed them)
+├── <sample_id>.pvals.parquet                       # per-base p-values
+├── <sample_id>.normalized_density.bw               # normalized signal density
+├── <sample_id>.background.bw                       # estimated background level
+├── <sample_id>.peak_calling.log                    # hotspot3 log
+├── fdr<X>/                                         # peak and hotspot calls, one folder per FDR in `fdrs`
+└── debug/                                          # hotspot3 intermediate files (emptied unless `save_debug = true`)
 ```
- 
-### Which step produces what
- 
-- **Alignment** (always): `<sample_id>.filtered.cram`, `<sample_id>.total_sequencing_stats.txt` and `stats/`.
-- **Hotspot calling** ([hotspot3](https://github.com/vierstralab/hotspot3)): everything else.
-### Peaks and hotspots
- 
-Each `fdr<X>/` directory contains:
- 
+
+See the [hotspot3 README](https://github.com/vierstralab/hotspot3#output-files) for the format of each hotspot3 file and how to interpret the fit statistics.
+
+## Peak and hotspot calls
+
+Each `fdr<X>/` folder contains:
+
 | File | Content |
 |---|---|
-| `<sample_id>.hotspots.fdr<X>.bed.gz` (+ `.bb`) | Hotspots: contiguous regions of significant bases |
-| `<sample_id>.peaks.fdr<X>.bed.gz` (+ `.bb`) | Peaks: summits within hotspots, trimmed to peak width. Column 4 is the `sample_id` |
- 
-- Use **peaks** for downstream analyses such as building the DHS index.
-- Which `fdr*` directories are created is set by `params.fdrs` (comma-separated FDR thresholds).
-- The fit-stats file name depends on the hotspot3 version. Current releases write `<sample_id>.fit_stats.bed.gz`.
- 
- 
-## Notes
- 
-- SRA downloads use `errorStrategy 'ignore'`: if `prefetch`/`fasterq-dump` fails for a given accession, the pipeline continues rather than aborting, and that run is silently dropped from downstream processing.
-- `align_id` must be unique across the samples file — records are deduplicated on this column before processing.
-- With the `Altius` profile, tasks that fail for reasons other than running out of memory (exit codes 134–143, retried up to 3 times) are ignored, so a finished run can be missing samples. Check `.nextflow.log` for ignored tasks and confirm every `sample_id` has a `.filtered.cram` (and `fdr*/` directories, if hotspots were expected).
-- To re-call hotspots without re-aligning, use `hotspots_calling.nf` on the CRAMs (see [Call hotspots on existing CRAMs](#call-hotspots-on-existing-crams)). The `fromCutcounts` entry in that file is defunct: it reads from a hard-coded directory.
-## Additional workflows
- 
-These entry points are not part of the main run. They take existing CRAMs/BAMs and are mostly used for QC and for depth-matched comparisons. All read a tab-separated `--samples_file` with a header row. Several of them write files with the same names as the main pipeline (for example `<sample_id>.total_sequencing_stats.txt` and hotspot3 outputs), so give them their own `--outdir` to avoid overwriting a main run.
- 
-### `stats.nf`: QC counts
- 
-| Entry | Input columns | Steps | Output in `<outdir>/<sample_id>/` |
-|---|---|---|---|
-| default | `sample_id`, `cram_file`, `cram_index` | `collect_basic_stats` and `percent_dup` | `<sample_id>.sequencing_stats.txt` (filtered aligned reads; duplicates, i.e. flag `1024`), `<sample_id>.spotdups.txt` and `<sample_id>.percent_dup.txt` (Picard duplication metrics recomputed after clearing existing duplicate flags) |
-| `-entry nuclearStats` | `sample_id`, `cram_file`, `cram_index` | nuclear filter (`samtools view -F 516` on `nuclear_chroms`), then `bin/bamcounts.py` | `<sample_id>.total_sequencing_stats.txt` |
-| `-entry preseq` | `sample_id`, `cram_file`, `cram_index`, `read_type` (`paired` or `single`) | `preseq c_curve` on nuclear reads | `<outdir>/<sample_id>.preseq_hist.txt` (directly in `<outdir>`, not per sample) |
- 
-`preseq` is not in the container: `run_preseq` uses a hard-coded conda environment (`/home/sabramov/miniconda3/envs/super-index`). Change the `conda` line in `stats.nf` to an environment with `preseq` and `samtools` before using it.
- 
-### `subsampling.nf`: depth-matched hotspots and SPOT score
- 
-| Entry | Input columns | Steps | Output in `<outdir>/<sample_id>/` |
-|---|---|---|---|
-| `-entry subsampleToFrac` | `sample_id`, `cram_file`, `cram_index`, `frac` | nuclear filter → keep fraction `frac` of read pairs (`samtools view --subsample <frac> --subsample-seed 42`, pairs kept together) → re-mark duplicates → hotspot3, `bamcounts.py` stats and CRAM conversion | `<sample_id>.subsampled_pairs.bam(.bai)`, `<sample_id>.marked.cram(.crai)`, `<sample_id>.total_sequencing_stats.txt` and the hotspot3 outputs |
-| `-entry filterAndCallHotspots` | `sample_id`, `bam_file`, `bam_index` | nuclear filter → hotspot3 | hotspot3 outputs. Use this for BAMs that have not been through `filter_nuclear`, e.g. marked BAMs from another pipeline |
-| `-entry spot1score` | `sample_id`, `cram_file` (index must be `<cram_file>.crai`) | `preprocessBams` (below) → hotspot1 → SPOT score | `r1.spot.out` (hotspot1 SPOT score; the file name is not prefixed with `sample_id`) |
- 
-`preprocessBams` is the sub-workflow used by `spot1score`, not an entry point. It keeps read 1 of each pair (`samtools view -F 140`, which also drops unmapped reads and reads with an unmapped mate), applies the nuclear filter, and randomly subsamples to `subsampling_spot1_depth` reads (`bin/random_sample.py`, seed 42; samples with fewer reads are kept whole).
- 
-`spot1score` runs hotspot1 through `bin/runhotspot.bash`, which also expects a mappability file at `<genome prefix>.K<readlength>.mappable_only.bed` next to `genome_fasta_file`. `hotspots_dir` in the params files points to an Altius path; set it to `/hotspot1` to use the copy inside the container.
- 
+| `<sample_id>.hotspots.fdr<X>.bed.gz(.tbi)` (+ `.bb`) | Hotspots: contiguous regions of significant bases |
+| `<sample_id>.peaks.fdr<X>.bed.gz(.tbi)` (+ `.bb`) | Peaks: summits within hotspots, trimmed to the width of the peak |
+
+Use peaks for downstream analyses such as building the DHS index.
+
+# Authors
+
+Developed by:
+
+- Sergey Abramov
+- Alexandr Boytsov
+- Athanasios Teodosiadis
+- Jemma Nelson
+
+Altius Institute for Biomedical Sciences

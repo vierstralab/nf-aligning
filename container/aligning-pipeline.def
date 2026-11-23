@@ -47,22 +47,8 @@ Stage: build-conda
         bash \
         rsync \
         build-essential
-    mamba env create -n babachi --file /environment.yml
-
-Bootstrap: docker
-From: condaforge/mambaforge:latest
-Stage: build-hotspot3
-
-%files
-    environment.hotspot3.yml /environment.hotspot3.yml
-
-%post
-    apt-get update && apt-get install -y \
-        bash \
-        rsync \
-        build-essential
-    mamba env create -n hotspot3 --file /environment.hotspot3.yml
-    /opt/conda/envs/hotspot3/bin/pip install hotspot3
+    mamba env create -n aligning --file /environment.yml
+    /opt/conda/envs/aligning/bin/pip install hotspot3
 
 Bootstrap: docker
 From: ubuntu:18.04
@@ -75,9 +61,6 @@ From: ubuntu:18.04
 
 %files from build-conda
     /opt/conda /opt/conda
-
-%files from build-hotspot3
-    /opt/conda/envs/hotspot3 /opt/conda/envs/hotspot3
 
 %post
     export DEBIAN_FRONTEND=noninteractive
@@ -93,7 +76,7 @@ From: ubuntu:18.04
 
 %environment
     export HOTSPOT_DIR=/hotspot1
-    export PATH=/opt/conda/envs/hotspot3/bin:/hotspot1/hotspot-deploy/bin:/opt/conda/envs/babachi/bin:$PATH
+    export PATH=/opt/conda/envs/aligning/bin:/hotspot1/hotspot-deploy/bin:$PATH
     export PYTHONNOUSERSITE=1
     export HOME="${NXF_TASK_WORKDIR:-/tmp}"
     export NUMBA_CACHE_DIR="$HOME/.numba_cache"

@@ -1,7 +1,7 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl = 2
 
-include { get_container } from "./aligning"
+include { get_container; filter_nuclear } from "./aligning"
 
 def fastaContainer = get_container(params.genome_fasta_file)
 def chrominfoContainer = get_container(params.nuclear_chrom_sizes)
@@ -55,6 +55,41 @@ process call_hotspots {
         rm -r debug/*
     fi
 	"""
+}
+
+workflow callHotspots {
+	take:
+		bam_files
+	main:
+        out = bam_files
+            | call_hotspots
+	emit:
+		out.peaks
+
+}
+
+
+workflow {
+	Channel.fromPath(params.samples_file)
+        | splitCsv(header:true, sep:'\t')
+		| map(row -> tuple(
+                row.sample_id,
+                row.cram_file,
+                row.cram_index ?: "${row.cram_file}.crai",
+            )
+        )
+        | map(it -> tuple(it[0], it[1], it[2]))
+        | callHotspots
+}
+
+
+// defunc
+workflow filterAndCallHotspots {
+    Channel.fromPath(params.samples_file)
+        | splitCsv(header:true, sep:'\t')
+        | map(row -> tuple(row.sample_id, file(row.bam_file), file(row.bam_index)))
+        | filter_nuclear
+        | callHotspots
 }
 
 process call_hotspots_from_cutcounts {
@@ -135,33 +170,6 @@ process call_hotspots_from_pvals {
 	"""
 }
 
-workflow callHotspots {
-	take:
-		bam_files
-	main:
-        out = bam_files
-            | call_hotspots
-	emit:
-		out.peaks
-
-}
-
-
-workflow {
-	Channel.fromPath(params.samples_file)
-        | splitCsv(header:true, sep:'\t')
-		| map(row -> tuple(
-                row.sample_id,
-                row.cram_file,
-                row.cram_index ?: "${row.cram_file}.crai",
-            )
-        )
-        | map(it -> tuple(it[0], it[1], it[2]))
-        | callHotspots
-}
-
-
-// defunc
 workflow tmp_debug {
     Channel.fromPath(params.samples_file)
         | splitCsv(header:true, sep:'\t')
@@ -176,7 +184,6 @@ workflow tmp_debug {
         | call_hotspots_from_pvals
 }
 
-// defunc
 workflow fromCutcounts {
     prev_run_dir = "/net/seq/data2/projects/sabramov/SuperIndex/hotspot3/w_babachi_new.v5/output/"
     Channel.fromPath(params.samples_file)

@@ -146,11 +146,11 @@ process merge_bam {
  * Step 4: Mark duplicates with Picard
  */
 process mark_duplicates {
-  tag "${ag_id}"
+  tag "${sample_id}"
   scratch true
   label "high_mem"
 
-  publishDir "${params.outdir}/${ag_id}/stats", pattern: "${metric_name}"
+  publishDir "${params.outdir}/${sample_id}/stats", pattern: "${metric_name}"
   container "${params.container}"
 
   input:
@@ -197,20 +197,40 @@ process filter_nuclear {
     script:
     name = "${sample_id}.filtered.bam"
     """
-    if [[ "${params.save_cram_mode}" == "nuclear" ]]; then
-        samtools view \
-            -@${task.cpus} \
-            -b \
-            -F 516 \
-            ${bam} \
-            -T "${params.genome_fasta_file}" \
-            \$(cat "${params.nuclear_chroms}") > ${name}
-    else
-        samtools view \
-            -@ ${task.cpus} \
-            -T "${params.genome_fasta_file}" \
-            -b -F 516 ${bam} > ${name}
-    fi
+    samtools view \
+        -@${task.cpus} \
+        -b \
+        -F 516 \
+        ${bam} \
+        -T "${params.genome_fasta_file}" \
+        \$(cat "${params.nuclear_chroms}") > ${name}
+
+    samtools index -@ ${task.cpus} ${name}
+    """
+}
+
+/**
+Step 5 (save_cram_mode = "all"): Filter down to reads passing filter, all chromosomes
+**/
+process filter_passing_reads {
+    container "${params.container}"
+    containerOptions fastaContainer
+    tag "${sample_id}"
+    cpus 2
+
+    input:
+        tuple val(sample_id), path(bam), path(bam_index)
+
+    output:
+        tuple val(sample_id), path("${name}"), path("${name}.bai")
+
+    script:
+    name = "${sample_id}.filtered.bam"
+    """
+    samtools view \
+        -@ ${task.cpus} \
+        -T "${params.genome_fasta_file}" \
+        -b -F 516 ${bam} > ${name}
 
     samtools index -@ ${task.cpus} ${name}
     """
@@ -347,12 +367,14 @@ workflow alignReads {
             | map(it -> tuple(it[0], it[3]))
             | distinct()
         
-        marked_bam_files
-            | filter_nuclear
+        filtered_bam_files = (params.save_cram_mode == "nuclear") ?
+            filter_nuclear(marked_bam_files) : filter_passing_reads(marked_bam_files)
+
+        filtered_bam_files
             | join(is_paired_dict)
             | insert_size
     
-        filter_nuclear.out
+        filtered_bam_files
             | convert_to_cram
     emit:
         convert_to_cram.out

@@ -5,6 +5,7 @@ fastaContainer = get_container(params.genome_fasta_file)
 
 
 process run_preseq {
+    // TODO: add preseq to the container
     conda "/home/sabramov/miniconda3/envs/super-index"
     tag "${sample_id}:${read_type}"
     publishDir "${params.outdir}"

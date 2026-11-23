@@ -1,24 +1,23 @@
-name: babachi
+name: aligning
 channels:
   - conda-forge
   - bioconda
-  - defaults
 dependencies:
-  - python=3.8.13
-  - pysam=0.19.1
-  - bedops=2.4.41
-  - bcftools=1.15.1
-  - plink2=2.00a3.3
+  - python=3.9
+  - pip
   - bwa=0.7.17
-  - bedtools=2.30.0
-  - pyfaidx=0.7.1
-  - pytables=3.7.0
-  - samtools=1.15.1
   - fastp=0.23.2
   - picard=2.27.4
-  - pigz=2.6
-  - sra-tools=2.10.0
+  - samtools
+  - pysam
+  - pigz
+  - sra-tools
   - ffq=0.3.0
-  - r-base=4.2.1
-
-prefix: /home/sabramov/miniconda3/envs/babachi
+  - bedops
+  - libflint
+  - ucsc-bedgraphtobigwig
+  - ucsc-bedtobigbed
+  - pybigwig
+  - bottleneck
+  - mawk
+  - pyarrow<21

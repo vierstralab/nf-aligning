@@ -5,6 +5,7 @@ include { get_container } from "./helpers"
 
 fastaContainer = get_container(params.genome_fasta_file)
 chrominfoContainer = get_container(params.chrominfo)
+spot1MappableContainer = get_container(params.spot1_mappable_file)
 
 
 // params.conda = "/home/sabramov/miniconda3/envs/jupyterlab"
@@ -59,7 +60,7 @@ process spot_score {
 
     // conda params.conda
     container "${params.container}"
-    containerOptions "${fastaContainer} ${chrominfoContainer}"
+    containerOptions "${fastaContainer} ${chrominfoContainer} ${spot1MappableContainer}"
 
     publishDir "${params.outdir}/${sample_id}"
 
@@ -74,7 +75,6 @@ process spot_score {
     renamed_input = "r1.${bam_file.extension}"
     genome_file = file(params.genome_fasta_file)
     genome_prefix = "${genome_file.parent}/${genome_file.simpleName}"
-    hotspots_dir = params.hotspots_dir ?: "/hotspot1"
 
     """
     # workaround for hotspots1 naming scheme...
@@ -82,13 +82,14 @@ process spot_score {
 	ln -s ${bam_file} ${renamed_input}
 	ln -s ${bam_file_index} ${renamed_input}.${bam_file_index.extension}
     bash $moduleDir/bin/runhotspot.bash \
-      "${params.hotspots_dir}" \
+      /hotspot1 \
       "\$PWD" \
       "${renamed_input}" \
       "${genome_prefix}" \
       ${params.chrominfo} \
       "${params.readlength}" \
-      DNaseI
+      DNaseI \
+      "${params.spot1_mappable_file}"
 
     starch --header \
         r1-both-passes/r1.hotspot.twopass.zscore.wig > r1.spots.starch
@@ -201,14 +202,6 @@ workflow subsampleToFrac {
         | subsample_with_pairs_frac
         | mark_dups_subsample
         | (callHotspots & total_bam_stats & convert_to_cram)
-}
-
-workflow filterAndCallHotspots {
-    Channel.fromPath(params.samples_file)
-        | splitCsv(header:true, sep:'\t')
-        | map(row -> tuple(row.sample_id, file(row.bam_file), file(row.bam_index)))
-        | filter_nuclear
-        | callHotspots
 }
 
 

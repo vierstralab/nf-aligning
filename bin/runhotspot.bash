@@ -7,6 +7,7 @@ GENOME=$4
 chromInfo=$5
 K=$6
 ASSAY=$7
+MAPPABLE=$8
 
 echo "Making SPOT in $OUTDIR"
 echo "TAGS: $TAGS"
@@ -36,7 +37,7 @@ fi
 echo "Creating $CONFIGOUT"
 
 chromFile=$(readlink -f "$5")
-mappableFile=$(readlink -f "$GENOME.K$K.mappable_only.bed")
+mappableFile=$(readlink -f "$MAPPABLE")
 chkchr=$(awk 'NR==1{print $1}' < "$chromFile")
 
 # Create the configuration file for the SPOT program
