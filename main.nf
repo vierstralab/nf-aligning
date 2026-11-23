@@ -15,7 +15,7 @@ def remove_ambiguous_bases(adapter) {
 
 
 process symlink_or_download {
-    publishDir "${params.outdir}/${sample_id}/stats", pattern: "${metadata}"
+    publishDir "${params.outdir}/${sample_id}/stats/${srr}", pattern: "${metadata}"
     publishDir "${params.outdir}/${sample_id}", pattern: "${srr}/*.fastq.gz"
     cpus params.threads
     tag "${srr}"
@@ -91,5 +91,5 @@ workflow {
         | set_key_for_group_tuple
         | trimReads
         | alignReads 
-        //| call_hotspots
+        | call_hotspots
 }

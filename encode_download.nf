@@ -3,7 +3,7 @@
 include { convert_to_cram } from "./aligning"
 nextflow.enable.dsl = 2
 
-params.conda = "$moduleDir/environment.yml"
+params.conda = "$moduleDir/container/environment.yml"
 
 
 process download_encode {

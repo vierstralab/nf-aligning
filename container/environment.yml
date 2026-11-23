@@ -19,7 +19,6 @@ dependencies:
   - pigz=2.6
   - sra-tools=2.10.0
   - ffq=0.3.0
-  - macs2=2.2.7.1
   - r-base=4.2.1
 
 prefix: /home/sabramov/miniconda3/envs/babachi

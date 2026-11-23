@@ -4,7 +4,6 @@ nextflow.enable.dsl = 2
 
 
 nuclearChromsContainer = get_container(params.nuclear_chroms)
-chromSizesContainer = get_container(params.chrom_sizes)
 fastaContainer = get_container(params.genome_fasta_file)
 
 genome_fasta_file = file(params.genome_fasta_file)
@@ -278,38 +277,6 @@ process total_bam_stats {
 }
 
 
-process macs2 {
-  tag "${sample_id}"
-  publishDir "${params.outdir}/${sample_id}/stats"
-  container "${params.container}"
-  containerOptions "${chromSizesContainer}"
-  scratch true
-
-  when:
-    params.do_macs
-
-  input:
-    tuple val(sample_id), path(bam), path(bai), val(is_paired)
-
-  output:
-    tuple val(sample_id), path("macs2.${sample_id}*")
-
-  script:
-  mode = 'BAM'
-  """
-  gen_size=\$(cat ${params.chrom_sizes} | awk '{print \$2}' | paste -sd+ | bc)
-  macs2 callpeak \
-    -t "${bam}" \
-    -f ${mode} \
-    -n macs2.${sample_id}\
-    -g \$gen_size -p 0.01 \
-    --shift 75 --extsize 150 \
-    --nomodel -B --SPMR \
-    --keep-dup all --call-summits > "macs2.${sample_id}.err"
-  """
-}
-
-
 /**
 Step 6: Convert Filtered Bam to cram file
 **/
@@ -383,7 +350,7 @@ workflow alignReads {
         marked_bam_files
             | filter_nuclear
             | join(is_paired_dict)
-            | (insert_size & macs2)
+            | insert_size
     
         filter_nuclear.out
             | convert_to_cram
