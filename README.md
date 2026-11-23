@@ -273,8 +273,6 @@ These entry points are not part of the main run. They take existing CRAMs/BAMs a
 | `-entry filterAndCallHotspots` | `sample_id`, `bam_file`, `bam_index` | nuclear filter → hotspot3 | hotspot3 outputs. Use this for BAMs that have not been through `filter_nuclear`, e.g. marked BAMs from another pipeline |
 | `-entry spot1score` | `sample_id`, `cram_file` (index must be `<cram_file>.crai`) | `preprocessBams` (below) → hotspot1 → SPOT score | `r1.spot.out` (hotspot1 SPOT score; the file name is not prefixed with `sample_id`) |
  
-`subsampleToFrac` needs a conda environment for its subsampling step: `subsample_with_pairs_frac` uses `conda params.conda`, which isn't set in the params files. Pass `--conda <env with samtools>` or change that line to `container "${params.container}"`.
- 
 `preprocessBams` is the sub-workflow used by `spot1score`, not an entry point. It keeps read 1 of each pair (`samtools view -F 140`, which also drops unmapped reads and reads with an unmapped mate), applies the nuclear filter, and randomly subsamples to `subsampling_spot1_depth` reads (`bin/random_sample.py`, seed 42; samples with fewer reads are kept whole).
  
 `spot1score` runs hotspot1 through `bin/runhotspot.bash`, which also expects a mappability file at `<genome prefix>.K<readlength>.mappable_only.bed` next to `genome_fasta_file`. `hotspots_dir` in the params files points to an Altius path; set it to `/hotspot1` to use the copy inside the container.

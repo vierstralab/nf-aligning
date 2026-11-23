@@ -26,7 +26,7 @@ Run everything from the repo root (or point `nextflow run` at it). Always pass a
 | `nextflow run stats.nf -entry nuclearStats` | same | Nuclear filter + `bamcounts.py` stats. |
 | `nextflow run stats.nf -entry preseq` | `sample_id, cram_file, cram_index, read_type` | `preseq c_curve` (hard-coded conda env, see Gotchas). |
 | `nextflow run subsampling.nf -entry spot1score` | `sample_id, cram_file` | R1 only → nuclear → subsample to `subsampling_spot1_depth` → hotspot1 SPOT score. |
-| `nextflow run subsampling.nf -entry subsampleToFrac` | `sample_id, cram_file, cram_index, frac` | Subsample pairs to a fraction → re-mark dups → [hotspot3](https://github.com/vierstralab/hotspot3) + stats + `<sample_id>.marked.cram`. Needs `--conda` (see Gotchas). |
+| `nextflow run subsampling.nf -entry subsampleToFrac` | `sample_id, cram_file, cram_index, frac` | Subsample pairs to a fraction → re-mark dups → [hotspot3](https://github.com/vierstralab/hotspot3) + stats + `<sample_id>.marked.cram`. |
 | `nextflow run subsampling.nf -entry filterAndCallHotspots` | `sample_id, bam_file, bam_index` | Nuclear filter → [hotspot3](https://github.com/vierstralab/hotspot3). |
  
 Treat these as legacy and avoid them unless asked: `encode_download.nf` (hard-coded metadata path); the `fromCutcounts` / `tmp_debug` entries in `hotspots_calling.nf` (marked defunc, hard-coded `prev_run_dir`). All hotspot calling lives in `hotspots_calling.nf` (hotspot3 only; this file replaces the old `hotspots_calling.hotspot3.nf` and its symlink).
@@ -63,7 +63,6 @@ The nf-index `samples_file` columns map to these outputs: `cram_file` → `.filt
 - **Silent failures.** The `Altius` profile retries exit codes 134–143 up to 3 times and otherwise uses `errorStrategy 'ignore'`. `merge_bam` and SRA download are also `ignore`. A finished run can therefore be missing samples. After every run, compare the sample IDs in `samples_file` with the directories that contain a `.filtered.cram` (and `fdr*/` if hotspots were expected), and check `.nextflow.log` for `FAILED`/`IGNORED` tasks.
 - Hotspot calling runs by default in both `main.nf` workflows. To skip it, remove `| call_hotspots` from the workflow and update the README.
 - `spot1score`: `params.hotspots_dir` points to an Altius path; the container's copy is at `/hotspot1`. hotspot1 also needs `<genome prefix>.K<readlength>.mappable_only.bed` next to the FASTA.
-- `subsampling.nf`'s `subsample_with_pairs_frac` uses `conda params.conda`, which is not defined in the params files. Pass `--conda <env>` or switch it to `container`.
 - `stats.nf:run_preseq` hard-codes a personal conda path (`/home/sabramov/miniconda3/envs/super-index`).
 - `mark_duplicates` in `aligning.nf` uses `${ag_id}` in `tag`/`publishDir` while its input is named `sample_id`. Check that `stats/<sample_id>.MarkDuplicates.picard` is actually published before relying on it.
 - Picard's `READ_NAME_REGEX` assumes Illumina-style read names. SRA-renamed reads won't parse for optical duplicates (a warning, not an error).
