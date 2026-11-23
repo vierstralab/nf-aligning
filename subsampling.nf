@@ -113,7 +113,9 @@ workflow preprocessBams {
 }
 
 process subsample_with_pairs_frac {
-    conda params.conda
+    container "${params.container}"
+    containerOptions "${fastaContainer}"
+    
     tag "${sample_id}"
     cpus 2
     scratch true
