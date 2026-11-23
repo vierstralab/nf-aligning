@@ -42,7 +42,7 @@ The README's "Additional workflows" section documents the inputs and outputs of 
 - Profiles: `Altius` (SLURM, apptainer via `module load apptainer`, singularity on). `new_cluster` and `old_cluster` only set queues and are meant to be combined, e.g. `-profile Altius,new_cluster`. Outside Altius, add a profile instead of editing `Altius`.
 Key params: `outdir` (relative path expected), `samples_file`, `threads`, `genome_fasta_file` (the BWA index must sit next to it with the same basename), `nuclear_chroms`, `chrom_sizes`, `nuclear_chrom_sizes`, `mappable_bases`, `fdrs` (comma-separated, default `0.05,0.01,0.001`), `save_cram_mode` (`nuclear` | `all`), `save_debug`. `chrominfo`, `hotspots_dir`, `readlength` and `subsampling_spot1_depth` are used only by `subsampling.nf -entry spot1score`.
  
-## Processing details agents get wrong
+## Processing details (easy to get wrong)
  
 - `bin/filter_reads.py` **does not remove reads**. It sets flags: 0x200 (QC fail) for MAPQ < 10, NM > 2, unpaired or improper pairs, or insert > 750; 0x1000 for non-nuclear. Removal happens later in `filter_nuclear` with `samtools view -F 516` (unmapped + QC-fail), restricted to `nuclear_chroms` when `save_cram_mode == "nuclear"`.
 - Duplicates are **marked, not removed** (MarkDuplicatesWithMateCigar, `MINIMUM_DISTANCE=300`). The CRAM keeps them with flag 1024.
