@@ -1,0 +1,82 @@
+Bootstrap: docker
+From: ubuntu:18.04
+Stage: build-kentutils
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y \
+        build-essential \
+        rsync \
+        libpng-dev \
+        uuid-dev \
+        libmysqlclient-dev \
+        zlib1g-dev
+    cd /
+    rsync -a rsync://hgdownload.soe.ucsc.edu/genome/admin/exe/userApps.archive/userApps.v438.src.tgz .
+    tar xzf userApps.v438.src.tgz
+    cd userApps
+    make utils MACHTYPE=x86_64
+
+Bootstrap: docker
+From: condaforge/mambaforge:latest
+Stage: build-hotspot1
+
+%post
+    apt-get update && apt-get install -y \
+        bash \
+        rsync \
+        build-essential \
+        git \
+        libgsl-dev \
+        wget
+    git clone https://github.com/StamLab/hotspot.git
+    cd hotspot
+    git checkout v4.1.1
+    cd hotspot-distr/hotspot-deploy
+    make
+
+Bootstrap: docker
+From: condaforge/mambaforge:latest
+Stage: build-conda
+
+%files
+    environment.yml /environment.yml
+
+%post
+    apt-get update && apt-get install -y \
+        bash \
+        rsync \
+        build-essential
+    mamba env create -n aligning --file /environment.yml
+    /opt/conda/envs/aligning/bin/pip install hotspot3
+
+Bootstrap: docker
+From: ubuntu:18.04
+
+%files from build-hotspot1
+    /hotspot/hotspot-distr /hotspot1
+
+%files from build-kentutils
+    /userApps/bin /usr/local/bin
+
+%files from build-conda
+    /opt/conda /opt/conda
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y \
+        bash \
+        bc \
+        libcurl4 \
+        libkrb5-dev \
+        libgsl-dev \
+        python-minimal
+    ln -sf /usr/bin/python2.7 /usr/bin/python2
+    ln -sf /bin/bash /bin/sh
+
+%environment
+    export HOTSPOT_DIR=/hotspot1
+    export PATH=/opt/conda/envs/aligning/bin:/hotspot1/hotspot-deploy/bin:$PATH
+    export PYTHONNOUSERSITE=1
+    export HOME="${NXF_TASK_WORKDIR:-/tmp}"
+    export NUMBA_CACHE_DIR="$HOME/.numba_cache"

@@ -1,0 +1,23 @@
+name: aligning
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.9
+  - pip
+  - bwa=0.7.17
+  - fastp=0.23.2
+  - picard=2.27.4
+  - samtools
+  - pysam
+  - pigz
+  - sra-tools
+  - ffq=0.3.0
+  - bedops
+  - libflint
+  - ucsc-bedgraphtobigwig
+  - ucsc-bedtobigbed
+  - pybigwig
+  - bottleneck
+  - mawk
+  - pyarrow<21

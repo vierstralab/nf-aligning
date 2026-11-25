@@ -4,15 +4,18 @@ include { get_container } from "./helpers"
 
 
 fastaContainer = get_container(params.genome_fasta_file)
+chrominfoContainer = get_container(params.chrominfo)
+spot1MappableContainer = get_container(params.spot1_mappable_file)
 
 
-
-params.conda = "/home/sabramov/miniconda3/envs/jupyterlab"
+// params.conda = "/home/sabramov/miniconda3/envs/jupyterlab"
 
 
 process take_r1_from_pair {
     tag "${sample_id}"
-    conda params.conda
+    // conda params.conda
+    container "${params.container}"
+    containerOptions "${fastaContainer}"
     cpus 3
 
     input:
@@ -34,7 +37,8 @@ process take_r1_from_pair {
 
 process subsample {
     tag "${sample_id}"
-    conda params.conda
+    //conda params.conda
+    container "${params.container}"
 
     input:
         tuple val(sample_id), path(bam_file), path(bam_file_index)
@@ -54,9 +58,10 @@ process subsample {
 
 process spot_score {
 
-    // Impossible to use anywhere except Altius cluster
-    //conda params.conda
-    module "bedops/2.4.35-typical:samtools/1.3:modwt/1.0:kentutil/302:hotspot2/2.1.1:jdk/1.8.0_92:gcc/4.7.2:R/3.2.5:picard/2.8.1:git/2.3.3:coreutils/8.25:bedtools/2.25.0:python/3.5.1:pysam/0.9.0:htslib/1.6.0:numpy/1.11.0:atlas-lapack/3.10.2:scipy/1.0.0:scikit-learn/0.18.1:preseq:/2.0.3:gsl/2.4"
+    // conda params.conda
+    container "${params.container}"
+    containerOptions "${fastaContainer} ${chrominfoContainer} ${spot1MappableContainer}"
+
     publishDir "${params.outdir}/${sample_id}"
 
 
@@ -77,13 +82,14 @@ process spot_score {
 	ln -s ${bam_file} ${renamed_input}
 	ln -s ${bam_file_index} ${renamed_input}.${bam_file_index.extension}
     bash $moduleDir/bin/runhotspot.bash \
-      "${params.hotspots_dir}" \
+      /hotspot1 \
       "\$PWD" \
       "${renamed_input}" \
       "${genome_prefix}" \
       ${params.chrominfo} \
       "${params.readlength}" \
-      DNaseI
+      DNaseI \
+      "${params.spot1_mappable_file}"
 
     starch --header \
         r1-both-passes/r1.hotspot.twopass.zscore.wig > r1.spots.starch
@@ -108,7 +114,9 @@ workflow preprocessBams {
 }
 
 process subsample_with_pairs_frac {
-    conda params.conda
+    container "${params.container}"
+    containerOptions "${fastaContainer}"
+    
     tag "${sample_id}"
     cpus 2
     scratch true
@@ -194,14 +202,6 @@ workflow subsampleToFrac {
         | subsample_with_pairs_frac
         | mark_dups_subsample
         | (callHotspots & total_bam_stats & convert_to_cram)
-}
-
-workflow filterAndCallHotspots {
-    Channel.fromPath(params.samples_file)
-        | splitCsv(header:true, sep:'\t')
-        | map(row -> tuple(row.sample_id, file(row.bam_file), file(row.bam_index)))
-        | filter_nuclear
-        | callHotspots
 }
 
 
